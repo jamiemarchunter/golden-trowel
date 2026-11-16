@@ -4230,6 +4230,15 @@ Object.assign(GT.ui, {
 });
 inv(); setSound(soundMode); music(false);
 title();
+// testing shortcut: add ?puzzle=bash (or circles, lock, ice, sheet) to the address to play one puzzle on its own
+{
+  const m = /[?&]puzzle=(\w+)/.exec(location.search);
+  if (m && GT.puzzles[m[1]]) {
+    $('title').hidden = true;
+    const go = () => puzzle(m[1], () => { say('You won that one. (Test mode: it starts again in a moment.)'); setTimeout(go, 1500); });
+    go();
+  }
+}
 })();
 </script>
 </body></html>
