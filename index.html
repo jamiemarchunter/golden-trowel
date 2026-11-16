@@ -283,6 +283,10 @@ i.coin.g { background: #f8d040; } i.coin.s { background: #c8d0d8; }
 .endbox b { font-family: var(--display); font-weight: 900; color: var(--gold); font-size: clamp(22px, 4.4vh, 50px); letter-spacing: .14em; }
 .endbox #stats { color: var(--ink-dim); }
 @media (prefers-reduced-motion: reduce) { .banner.show, .more { animation: none; } .bash-face, .ice-me { transition: none; } }
+
+/* THE END sits over the controls on the left, so it never covers the last lines of the story */
+.theend { left: 12px; bottom: 12px; transform: none; width: var(--leftw); }
+@media (max-width: 820px), (orientation: portrait) { .theend { left: 50%; bottom: 3vh; transform: translateX(-50%); width: min(40em, calc(100% - 32px)); } }
 </style>
 
 <div class="rig">
@@ -366,6 +370,7 @@ i.coin.g { background: #f8d040; } i.coin.s { background: #c8d0d8; }
       <div class="chapbar"><b id="chap"></b><span id="where"></span></div>
       <div class="logwrap">
         <div class="log" id="log" aria-live="polite"></div>
+        <button type="button" class="moretext" id="moretext" hidden>▼ more</button>
       </div>
       <form class="cmd" id="cmdform" autocomplete="off">
         <label for="cmd">&gt;</label>
@@ -3821,7 +3826,7 @@ PZ.sheet = {
 const $ = id => document.getElementById(id);
 const g = GT.game;
 const cv = $('scene'), log = $('log'), input = $('cmd'), label = $('label');
-let verb = 'look', selItem = null, cut = null, curScene = null, curSpecial = null;
+let verb = 'look', selItem = null, cut = null, curScene = null, curSpecial = null, hold = false;
 
 /* ---------------- typewriter text ---------------- */
 const queue = []; let typing = null;
@@ -3831,14 +3836,18 @@ function say(text, cls) {
   if (cls === 'you') { const p = document.createElement('p'); p.className = 'you'; p.textContent = '> ' + text; log.appendChild(p); pinTo(p); scroll(); return; }
   queue.push({ text: String(text), cls, pin: pinNext }); pinNext = false; if (!typing) next();
 }
-/* The story box is big enough now: no MORE / CONTINUE buttons. New text just follows on
-   and the box keeps up with it; scroll back with the wheel to re-read. */
+/* No CONTINUE button: text follows straight on. But new text never pushes its own first line off the
+   top: if a block is longer than the box, a small MORE tab shows and ENTER, a click or the wheel reads on. */
 let pin = Infinity, pinNext = false;
+const moreBtn = $('moretext');
 const maxScroll = () => Math.max(0, log.scrollHeight - log.clientHeight);
-function pinTo() {}
-function scroll() { log.scrollTop = maxScroll(); }
-function moreLeft() { return false; }
-function page() {}
+function pinTo(p) { pin = Math.max(0, p.offsetTop - log.offsetTop - 4); }
+function scroll() { log.scrollTop = Math.min(maxScroll(), pin); updateMore(); }
+function updateMore() { moreBtn.hidden = !(maxScroll() > log.scrollTop + parseFloat(getComputedStyle(log).paddingBottom || '0') + 4); }
+function moreLeft() { return !moreBtn.hidden; }
+function page() { pin = log.scrollTop + Math.max(60, log.clientHeight - 48); scroll(); }
+log.addEventListener('scroll', () => { if (log.scrollTop > pin) pin = log.scrollTop; updateMore(); });
+moreBtn.addEventListener('click', () => { page(); input.focus(); });
 function next() {
   const job = queue.shift(); if (!job) { typing = null; if (cut) cutReady(); return; }
   const p = document.createElement('p'); if (job.cls) p.className = job.cls; log.appendChild(p);
@@ -3847,10 +3856,11 @@ function next() {
   let i = 0, timer;
   typing = { finish() { clearInterval(timer); p.innerHTML = fmt(job.text); scroll(); next(); } };
   if (fast) return typing.finish();
-  timer = setInterval(() => { i += 3; p.textContent = job.text.slice(0, i); scroll(); if (i >= job.text.length) typing.finish(); }, 14);
+  const stepN = Math.max(4, Math.ceil(job.text.length / 45));
+  timer = setInterval(() => { i += stepN; p.textContent = job.text.slice(0, i); scroll(); if (i >= job.text.length) typing.finish(); }, 14);
 }
 function flush() { while (typing) typing.finish(); }
-log.addEventListener('click', () => { if (typing) typing.finish(); else if (cut) advance(); });
+log.addEventListener('click', () => { if (typing) typing.finish(); else if (moreLeft()) page(); else if (cut) advance(); });
 
 /* ---------------- the picture ---------------- */
 function draw(scene, special) {
@@ -3859,7 +3869,9 @@ function draw(scene, special) {
 }
 // the epilogue moves you "home", which has no room of its own: show the finale picture there
 function sceneOfRoom() { if (g.s.over) return 'end'; const r = g.room; if (!r) return 'end'; return r.scene || g.s.room; }
-function redraw() { if (!cut) draw(sceneOfRoom()); updateCompass(); }
+function redraw() { if (!cut && !hold) draw(sceneOfRoom()); updateCompass(); }
+// a story picture stays up after its text until the player does something
+function release() { if (hold) { hold = false; if (!cut) draw(sceneOfRoom()); } }
 
 /* ---------------- hotspots ---------------- */
 const hotAt = ev => {
@@ -3884,6 +3896,7 @@ cv.addEventListener('mousemove', ev => {
 cv.addEventListener('mouseleave', () => label.hidden = true);
 cv.addEventListener('click', ev => {
   if (cut) return advance();
+  if (hold) return release();
   const h = hotAt(ev); if (!h) return;
   if (h.dir) return command('go ' + h.dir);
   if (selItem) { const it = GT.items[selItem].names[0]; const v = verb === 'give' ? 'give' : 'use'; selectItem(null); return command(v === 'give' ? `give ${it} to ${h.word}` : `use ${it} on ${h.word}`); }
@@ -3936,7 +3949,7 @@ const history = []; let hpos = 0;
 function command(text) {
   if (cut) { advance(); return; }
   if (pz) return;
-  flush();
+  flush(); release();
   GT.run(text);
   history.push(text); hpos = history.length;
 }
@@ -3963,26 +3976,32 @@ function cutscene(steps, done) {
 // ENTER, SPACE or a click moves it on sooner.
 function cutReady() {
   if (!cut) return; cut.ready = true;
-  const s = cut.steps[cut.i], last = cut.i >= cut.steps.length - 1;
+  const n = cut.steps[cut.i + 1];
+  // text follows straight on. Only a change of picture waits, so the old picture can be read first.
+  const changes = n && ((n.special || null) !== curSpecial || (n.scene && n.scene !== curScene)) && (n.scene || n.special);
   clearTimeout(cut.t);
-  cut.t = setTimeout(() => advance(), last ? 500 : Math.min(11000, 1200 + (s ? s.text.length : 0) * 32));
+  const go = () => { if (!cut) return; if (changes && moreLeft()) { cut.t = setTimeout(go, 400); return; } advance(false, true); };
+  cut.t = setTimeout(go, changes ? Math.min(curSpecial ? 8000 : 3500, 1500 + cut.read * 22) : 350);
 }
-function advance(first) {
+function advance(first, auto) {
   if (!cut) return;
   if (typing) { flush(); return; }
+  if (!first && !auto && moreLeft()) { page(); return; }
   if (!first && !cut.ready) return;
   clearTimeout(cut.t);
   cut.i++; cut.ready = false;
+  { const n = cut.steps[cut.i]; if (n && (n.scene || n.special)) cut.read = 0; if (n) cut.read = (cut.read || 0) + n.text.length; }
   const s = cut.steps[cut.i];
   if (!s) {
     const d = cut.done; cut = null; document.body.classList.remove('cutting');
     input.placeholder = 'What now?';
-    draw(sceneOfRoom()); d && d(); updateCompass(); input.focus();
+    if (curSpecial) hold = true; else draw(sceneOfRoom());
+    d && d(); updateCompass(); input.focus();
     return;
   }
   if (s.scene || s.special) draw(s.scene || curScene, s.special);
   input.placeholder = 'press ENTER (or click) to skip ahead';
-  pinNext = true;
+  if (cut.i === 0) pinNext = true;
   say(s.text, s.cls || 'cut');
 }
 document.addEventListener('keydown', e => {
@@ -4003,7 +4022,7 @@ function death(cb) {
   flush();
   const d = $('dead'); d.hidden = false;
   input.disabled = true;
-  const go = () => { d.hidden = true; input.disabled = false; input.focus(); document.removeEventListener('keydown', key); pinNext = true; cb(); };
+  const go = () => { hold = false; d.hidden = true; input.disabled = false; input.focus(); document.removeEventListener('keydown', key); pinNext = true; cb(); };
   const key = e => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
   $('deadbtn').onclick = go;
   setTimeout(() => { document.addEventListener('keydown', key); $('deadbtn').focus(); }, 400);
@@ -4022,7 +4041,7 @@ GT.ui.autoWinPuzzle = () => pz && pz.autoWin();
 
 /* ---------------- the end ---------------- */
 function end() {
-  flush();
+  flush(); hold = false;
   draw('end', 'end');
   const e = $('theend'); e.hidden = false;
   $('stats').textContent = `Turns: ${g.s.turns}   ·   Deaths: ${g.s.deaths}   ·   Hints used: ${Object.values(g.s.hints || {}).filter(v => v === 2).length} of 8`;
@@ -4171,7 +4190,7 @@ function slotMenu(mode) {
     const b = document.createElement('button'); b.className = 'pz-btn slot';
     b.innerHTML = `<b>Slot ${n}</b><span>${s ? `Chapter ${GT.NUM[s.chapter]} · ${GT.rooms[s.room] ? GT.rooms[s.room].name : ''} · ${new Date(s.savedAt || Date.now()).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}` : 'Empty'}</span>`;
     b.disabled = mode === 'load' && !s;
-    b.onclick = () => { m.hidden = true; if (mode === 'save') GT.save.slot(n); else { log.innerHTML = ''; pin = Infinity; GT.save.load(n); redraw(); inv(); } input.focus(); };
+    b.onclick = () => { m.hidden = true; if (mode === 'save') GT.save.slot(n); else { log.innerHTML = ''; pin = Infinity; hold = false; GT.save.load(n); redraw(); inv(); } input.focus(); };
     list.appendChild(b);
   });
 }
@@ -4187,7 +4206,7 @@ function title() {
 }
 function newGame() {
   g.s = GT.newState(); g.s.started = true;
-  log.innerHTML = ''; pin = Infinity; selectItem(null); inv();
+  log.innerHTML = ''; pin = Infinity; hold = false; selectItem(null); inv();
   $('title').hidden = true;
   input.focus();
   g.chapter(1, 'A Hard Thing in the Soil', null);
@@ -4196,12 +4215,12 @@ function newGame() {
     { scene: 'hall', special: 'intro', text: 'England. The Danelaw. A grey morning in the village of Skegness, where the Vikings came to raid, took one look, and decided to farm instead.' },
     { scene: 'hall', special: 'intro', text: 'Chris wakes up, yawns, and pads into the hall of the longhouse.\n\nHis wife is already up. VICTORIA: Nordic shield maiden, named for her countless victories, and one of the most famous warriors in the land. She is sharpening an axe. She has four.\n\nChris is proud that she is his wife. He also feels, most mornings, a bit inadequate. He is a turnip farmer. He is five foot six, he has a boring haircut, and he cannot grow a beard.' },
     { scene: 'hall', special: 'intro', text: 'He does know the name of every kind of turnip in every language of the known world. He also tells people he is an "Excel champion". Nobody knows what that is. So it is ignored.\n\nWhat Chris wants, more than anything, is to make his name. To be the most famous farmer in the land. To have a story of his own, full of adventure, and danger at every turn.' },
-    { scene: 'hall', text: 'This morning he makes Victoria breakfast, to show his love.\n\nHe burns the bread. Not a bit. All the way through. It is still on fire slightly.\n\n"I will make soup," says Chris. "Turnip soup. I will just go and dig one up."' },
-    { scene: 'hall', text: '(Type what you want to do, like LOOK, GO SOUTH, DIG TURNIP or TALK TO VICTORIA. Or click an action button under the picture, then click something in the picture. Click the text, or press ENTER, to skip ahead.)' }
+    { text: 'This morning he makes Victoria breakfast, to show his love.\n\nHe burns the bread. Not a bit. All the way through. It is still on fire slightly.\n\n"I will make soup," says Chris. "Turnip soup. I will just go and dig one up."' },
+    { text: '(Type what you want to do, like LOOK, GO SOUTH, DIG TURNIP or TALK TO VICTORIA. Or click an action button under the picture, then click something in the picture. Click the text, or press ENTER, to skip ahead.)' }
   ], () => { g.go('hall'); inv(); });
 }
 $('newgame').onclick = () => { actx(); setSound(soundMode); newGame(); };
-$('continue').onclick = () => { actx(); setSound(soundMode); $('title').hidden = true; log.innerHTML = ''; pin = Infinity; GT.save.load('auto'); inv(); redraw(); input.focus(); };
+$('continue').onclick = () => { actx(); setSound(soundMode); $('title').hidden = true; log.innerHTML = ''; pin = Infinity; hold = false; GT.save.load('auto'); inv(); redraw(); input.focus(); };
 
 /* ---------------- hook into the engine ---------------- */
 Object.assign(GT.ui, {
